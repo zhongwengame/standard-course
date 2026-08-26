@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>课堂互动终端 - 学生端</title>
+    <script src="https://cdn.staticfile.net/vue/3.3.4/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            --team-wei: #e53935; --team-shu: #43a047; --team-wu: #1e88e5;
+            --primary-blue: #3498db; --bg: #f4f7f6; --card-bg: #ffffff;
+            --text-dark: #2c3e50; --text-light: #7f8c8d;
+        }
+        html, body { height: 100%; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; }
+        #app { background: var(--card-bg); width: 100%; max-width: 420px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; overflow: hidden; display: flex; flex-direction: column; min-height: 80vh; max-height: 95vh; }
+        .main-content { flex-grow: 1; display: flex; flex-direction: column; padding: 25px; overflow-y: auto; }
+        .status-bar { padding: 10px; font-size: 14px; font-weight: 500; transition: all 0.3s; }
+        .status-bar.connected { background: #2ecc71; color: white; }
+        .status-bar.disconnected { background: #f39c12; color: white; }
+        h1 { color: var(--primary-blue); margin: 0 0 20px; font-size: 24px; }
+
+        /* Join View */
+        .join-view p { color: var(--text-light); margin: 0 0 25px; }
+        .join-btn { width: 100%; padding: 16px; font-size: 18px; font-weight: bold; color: white; background: var(--primary-blue); border: none; border-radius: 12px; cursor: pointer; margin-top: 10px; }
+        .join-btn:active { transform: scale(0.97); }
+
+        /* Waiting View */
+        .waiting-view { flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; }
+        .waiting-view .spinner { width: 50px; height: 50px; border: 6px solid #eee; border-top-color: var(--primary-blue); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .waiting-view .hint { color: var(--text-light); font-size: 15px; }
+
+        /* Scoreboard */
+        .scoreboard { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 15px; }
+        .score-item { flex: 1; padding: 8px 4px; border-radius: 10px; color: white; font-size: 13px; font-weight: bold; }
+        .score-item .num { font-size: 20px; display: block; margin-top: 2px; }
+
+        /* Echo Wall */
+        .input-group { text-align: left; margin-bottom: 15px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; color: var(--text-light); }
+        input, textarea { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 10px; box-sizing: border-box; font-size: 16px; transition: border-color 0.3s; }
+        input:focus, textarea:focus { border-color: var(--primary-blue); outline: none; }
+        .send-btn { width: 100%; padding: 15px; background: var(--primary-blue); color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; }
+
+        /* Jeopardy Buzzer */
+        .jeopardy-view { flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: center; }
+        .player-info { background: #ecf0f1; padding: 8px 15px; border-radius: 12px; font-size: 16px; font-weight: bold; }
+        .player-info .team-name { font-weight: 900; }
+        .buzzer-status { font-size: 22px; font-weight: bold; color: var(--text-dark); min-height: 60px; display:flex; align-items:center; justify-content:center; padding: 0 10px; flex-direction:column; }
+        .buzzer-status.correct { color: #27ae60; }
+        .buzzer-status.wrong { color: #e74c3c; }
+        .score-change { font-size: 16px; font-weight: bold; margin-top: 5px; }
+        .score-change.plus { color: #27ae60; }
+        .score-change.minus { color: #e74c3c; }
+        .buzzer-btn { width: 220px; height: 220px; border-radius: 50%; border: 10px solid rgba(255,255,255,0.5); display: flex; justify-content: center; align-items: center; font-size: 60px; color: white; font-weight: 900; text-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer; transition: all 0.2s ease; user-select: none; }
+        .buzzer-btn.inactive { background: #bdc3c7 !important; cursor: not-allowed; transform: scale(0.95); box-shadow: none; }
+        .buzzer-btn:not(.inactive):active { transform: scale(0.9); }
+
+        /* Quiz / Answering View (新增) */
+        .quiz-view { display: flex; flex-direction: column; flex-grow: 1; }
+        .q-title { font-size: 18px; color: var(--text-dark); font-weight: bold; margin-bottom: 20px; line-height: 1.5; text-align: left; }
+        .option-btn { background: #ecf0f1; color: var(--text-dark); padding: 16px; margin-bottom: 12px; border-radius: 12px; text-align: left; font-size: 16px; font-weight: 500; border: 2px solid transparent; transition: 0.2s; }
+        .option-btn.selected { background: #e3f2fd; border-color: var(--primary-blue); color: #1565c0; }
+        .submit-btn { width: 100%; padding: 15px; background: #2ecc71; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; margin-top: 10px; opacity: 1; transition: 0.3s; }
+        .submit-btn:disabled { background: #bdc3c7; cursor: not-allowed; opacity: 0.7; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div class="status-bar" :class="connectionStatus.class">{{ connectionStatus.text }}</div>
+
+    <!-- Step 1: 输入姓名并加入教室 -->
+    <div class="main-content" v-if="!hasJoined">
+        <div class="join-view">
+            <h1>加入课堂</h1>
+            <p>输入你的姓名，与老师大屏实时互动</p>
+            <div class="input-group">
+                <label>你的大名？</label>
+                <input type="text" v-model="name" placeholder="请输入你的名字" @keyup.enter="joinClassroom">
+            </div>
+            <button class="join-btn" @click="joinClassroom">✅ 进入教室</button>
+        </div>
+    </div>
+
+    <!-- Step 2: 诸神之战模式但尚未获得分组 -->
+    <div class="main-content" v-else-if="mode === 'jeopardy' && !team">
+        <div class="waiting-view">
+            <div class="spinner"></div>
+            <h1>诸神之战准备中</h1>
+            <p class="hint">你好，{{ name }}！正在等待老师为你自动分组...</p>
+        </div>
+    </div>
+
+    <!-- Step 3: 已分组/互动主界面 -->
+    <div class="main-content" v-else>
+        
+        <!-- === 模式 A：诸神之战抢答 === -->
+        <div v-if="mode === 'jeopardy'" class="jeopardy-view">
+            <div class="scoreboard" style="width:100%;">
+                <div class="score-item" :style="{ background: teamColors.wei }">魏<span class="num">{{ teamScores.wei || 0 }}</span></div>
+                <div class="score-item" :style="{ background: teamColors.wu }">吴<span class="num">{{ teamScores.wu || 0 }}</span></div>
+                <div class="score-item" :style="{ background: teamColors.shu }">蜀<span class="num">{{ teamScores.shu || 0 }}</span></div>
+            </div>
+
+            <div class="player-info">
+                <span :style="{ color: teamColors[team] }" class="team-name">【{{ teamNames[team] || '未分组' }}】</span> {{ name }}
+            </div>
+            <div class="buzzer-status" :class="resultClass">
+                {{ jeopardyStatus }}
+                <div v-if="lastScoreChange !== null" class="score-change" :class="lastScoreChange >= 0 ? 'plus' : 'minus'">
+                    {{ lastScoreChange >= 0 ? '+' : '' }}{{ lastScoreChange }} 分
+                </div>
+            </div>
+            <div class="buzzer-btn"
+                 @click="buzzIn"
+                 :class="{ inactive: !isBuzzerActive }"
+                 :style="{ background: teamColors[team] || '#bdc3c7', boxShadow: (isBuzzerActive && team) ? `0 0 35px ${teamColors[team]}` : 'none' }">
+                 抢
+            </div>
+        </div>
+
+        <!-- === 模式 B：在线同步答题 (新增) === -->
+        <div v-else-if="mode === 'quiz'" class="quiz-view">
+            <div style="text-align: right; color: var(--text-light); font-weight: bold; margin-bottom: 15px;">👤 {{ name }}</div>
+            
+            <!-- 待机中 -->
+            <div v-if="questionStatus === 'standby'" class="waiting-view" style="flex-grow:1;">
+                <div class="spinner"></div>
+                <h2>准备答题</h2>
+                <p class="hint">请看大屏幕，等待老师发放题目...</p>
+            </div>
+
+            <!-- 选择题作答 -->
+            <div v-if="questionStatus === 'answering' && currentQType === 'choice'">
+                <div class="q-title" v-html="currentQuestion.question"></div>
+                <div 
+                    v-for="(opt, idx) in currentQuestion.options" 
+                    :key="idx" 
+                    class="option-btn" 
+                    :class="{selected: selectedAnswer === opt}"
+                    @click="selectedAnswer = opt"
+                >
+                    {{ opt }}
+                </div>
+                <button class="submit-btn" :disabled="!selectedAnswer" @click="submitAnswer">🚀 提交答案</button>
+            </div>
+            
+            <!-- 提交成功 -->
+            <div v-if="questionStatus === 'submitted'" class="waiting-view" style="flex-grow:1;">
+                <h2 style="color: #2ecc71;">✅ 提交成功！</h2>
+                <p class="hint">等待老师在大屏上公布答案和数据...</p>
+            </div>
+        </div>
+
+        <!-- === 模式 C：回音壁/留言板 === -->
+        <div v-else class="echo-wall-view">
+            <h1>🌱 秀成长</h1>
+            <div class="input-group">
+                <label>你说啥？ ({{ name }})</label>
+                <textarea v-model="text" rows="5" placeholder="把你的想法发射到大屏幕！"></textarea>
+            </div>
+            <button class="send-btn" @click="send">🚀 发射想法</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, onMounted, computed } = Vue;
+    createApp({
+        setup() {
+            const name = ref(localStorage.getItem('stuName') || '');
+            const team = ref(localStorage.getItem('stuTeam') || null);
+            const hasJoined = ref(!!localStorage.getItem('stuName'));
+            const text = ref('');
+            const status = ref('正在连接服务器...');
+            const mode = ref('echoWall'); // 可选值: echoWall, jeopardy, quiz
+            let client, topic;
+
+            // 抢答相关
+            const isBuzzerActive = ref(false);
+            const jeopardyStatus = ref('等待老师开启题目');
+            const resultClass = ref('');
+            const lastScoreChange = ref(null);
+            const teamNames = { wei: '魏', shu: '蜀', wu: '吴' };
+            const teamColors = { wei: '#e53935', shu: '#43a047', wu: '#1e88e5' };
+            const teamScores = ref({ wei: 0, shu: 0, wu: 0 });
+
+            // 在线答题相关 (新增)
+            const currentQType = ref('');
+            const currentQuestion = ref({});
+            const selectedAnswer = ref('');
+            const questionStatus = ref('standby'); // standby, answering, submitted
+
+            const connectionStatus = computed(() => {
+                if (status.value.includes('已连接')) return { class: 'connected', text: `🟢 ${status.value}` };
+                return { class: 'disconnected', text: `🟠 ${status.value}` };
+            });
+
+            onMounted(() => {
+                topic = new URLSearchParams(window.location.search).get('topic');
+                if (!topic) {
+                    status.value = "错误：缺少房间信息！";
+                    return;
+                }
+                client = mqtt.connect('wss://05d1d5baec9d4cb3a21f5517b430cff1.s1.eu.hivemq.cloud:8884/mqtt', {
+                    username: 'classpro',
+                    password: 'Classpro2026',
+                    clientId: 'stu_' + Math.random().toString(16).substr(2, 8)
+                });
+
+                client.on('connect', () => {
+                    status.value = '已连接，等待指令...';
+                    client.subscribe(topic);
+                    if (hasJoined.value && name.value) {
+                        publishJoin();
+                    }
+                });
+
+                client.on('error', () => status.value = "连接中断，请刷新");
+
+                client.on('message', (msgTopic, message) => {
+                    if (msgTopic !== topic) return;
+                    try {
+                        const data = JSON.parse(message.toString());
+                        handleTeacherCommand(data);
+                    } catch (e) { console.error("Invalid message format", e); }
+                });
+            });
+
+            const normalize = (s) => (s || '').trim();
+
+            const handleTeacherCommand = (data) => {
+                switch (data.type) {
+                    // ---- 分组与模式切换 ----
+                    case 'TEAM_ASSIGN':
+                        if (normalize(data.name) === normalize(name.value)) {
+                            team.value = data.team;
+                            localStorage.setItem('stuTeam', data.team);
+                        }
+                        break;
+                    case 'TEAM_ASSIGN_ALL':
+                        if (Array.isArray(data.list)) {
+                            const mine = data.list.find(item => normalize(item.name) === normalize(name.value));
+                            if (mine) {
+                                team.value = mine.team;
+                                localStorage.setItem('stuTeam', mine.team);
+                            }
+                        }
+                        break;
+                    case 'SWITCH_MODE':
+                        mode.value = data.mode;
+                        if (data.mode === 'jeopardy') {
+                            jeopardyStatus.value = "准备抢答...";
+                            isBuzzerActive.value = false;
+                            resultClass.value = '';
+                            lastScoreChange.value = null;
+                        } else if (data.mode === 'quiz') {
+                            questionStatus.value = 'standby';
+                        }
+                        break;
+
+                    // ---- 在线答题 (新增) ----
+                    case 'SYNC_QUESTION':
+                        mode.value = 'quiz';
+                        currentQType.value = data.qType;
+                        currentQuestion.value = data.data;
+                        selectedAnswer.value = '';
+                        questionStatus.value = 'answering';
+                        break;
+                    case 'STANDBY':
+                        if (mode.value === 'quiz') {
+                            questionStatus.value = 'standby';
+                        }
+                        break;
+
+                    // ---- 抢答逻辑 ----
+                    case 'START_BUZZER':
+                    case 'OPEN_BUZZ':
+                        mode.value = 'jeopardy';
+                        isBuzzerActive.value = true;
+                        jeopardyStatus.value = '抢！';
+                        resultClass.value = '';
+                        lastScoreChange.value = null;
+                        break;
+                    case 'BUZZ_LOCK':
+                        isBuzzerActive.value = false;
+                        if (data.winnerTeam === team.value && normalize(data.winnerName) === normalize(name.value)) {
+                            jeopardyStatus.value = '🎉 你抢到了！等待老师判定...';
+                        } else {
+                            jeopardyStatus.value = `【${teamNames[data.winnerTeam] || '未知'}】的 ${data.winnerName} 抢到了，等待判定...`;
+                        }
+                        break;
+                    case 'STOP_BUZZER':
+                        isBuzzerActive.value = false;
+                        if (data.winnerTeam === team.value && normalize(data.winnerName) === normalize(name.value)) {
+                            jeopardyStatus.value = '🎉 你抢到了！';
+                        } else if (data.winnerName) {
+                            jeopardyStatus.value = `【${teamNames[data.winnerTeam]}】的 ${data.winnerName} 抢到了!`;
+                        } else {
+                            jeopardyStatus.value = '本题时间到，无人抢答';
+                        }
+                        break;
+                    case 'BUZZ_RESULT':
+                        isBuzzerActive.value = false;
+                        resultClass.value = data.correct ? 'correct' : 'wrong';
+                        if (data.winnerTeam === team.value && normalize(data.winnerName) === normalize(name.value)) {
+                            jeopardyStatus.value = data.correct ? '🎉 回答正确！' : '😢 回答错误';
+                        } else {
+                            jeopardyStatus.value = `【${teamNames[data.winnerTeam]}】的 ${data.winnerName} ${data.correct ? '回答正确' : '回答错误'}`;
+                        }
+                        if (typeof data.points === 'number') {
+                            lastScoreChange.value = data.correct ? data.points : -Math.abs(data.points);
+                        }
+                        break;
+                    case 'SCORE_UPDATE':
+                        if (data.scores) teamScores.value = { ...teamScores.value, ...data.scores };
+                        break;
+                }
+            };
+
+            const publishJoin = () => {
+                const msg = { type: 'JOIN', name: name.value, time: Date.now() };
+                client.publish(topic, JSON.stringify(msg));
+            };
+
+            const joinClassroom = () => {
+                if (!name.value.trim()) return alert('请先输入你的大名！');
+                localStorage.setItem('stuName', name.value.trim());
+                hasJoined.value = true;
+                if (client && client.connected) {
+                    publishJoin();
+                }
+            };
+
+            const send = () => {
+                if (!name.value || !text.value) return alert('内容不能为空哦！');
+                const msg = { type: 'ECHO_WALL', name: name.value, text: text.value, time: new Date().toLocaleTimeString('en-GB') };
+                client.publish(topic, JSON.stringify(msg), () => {
+                    status.value = '✅ 发射成功！';
+                    text.value = '';
+                    setTimeout(() => status.value = '已连接，等待指令...', 2000);
+                });
+            };
+
+            const buzzIn = () => {
+                if (!isBuzzerActive.value) return;
+                if (!team.value) return alert("尚未分配队伍，无法抢答！");
+                isBuzzerActive.value = false;
+                jeopardyStatus.value = '已抢答！等待结果...';
+                resultClass.value = '';
+                lastScoreChange.value = null;
+                const msg = { type: 'BUZZ', name: name.value, team: team.value, time: Date.now() };
+                client.publish(topic, JSON.stringify(msg));
+            };
+
+            // 新增：提交答案函数
+            const submitAnswer = () => {
+                if (!selectedAnswer.value) return;
+                const msg = { 
+                    type: 'SUBMIT_ANSWER', 
+                    name: name.value, 
+                    answer: selectedAnswer.value 
+                };
+                client.publish(topic, JSON.stringify(msg));
+                questionStatus.value = 'submitted';
+            };
+
+            return {
+                name, team, hasJoined, text, status, mode,
+                isBuzzerActive, jeopardyStatus, resultClass, lastScoreChange, teamScores,
+                joinClassroom, send, buzzIn, connectionStatus,
+                teamNames, teamColors,
+                // 新增暴漏给模板的变量和方法
+                currentQType, currentQuestion, selectedAnswer, questionStatus, submitAnswer
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
